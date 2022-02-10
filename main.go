@@ -60,7 +60,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		b, contentType := structureMultiform(formData, image)
+		b, contentType := structureMultiform(formData, image, imageName)
 		// 关闭文件
 		_ = image.Close()
 
@@ -87,12 +87,12 @@ func main() {
 }
 
 // 构造多表单
-func structureMultiform(fromData map[string]io.Reader, file *os.File) (bytes.Buffer, string) {
+func structureMultiform(formData map[string]io.Reader, file ReadImage.Image, fileName string) (bytes.Buffer, string) {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 
 	// 写入表单数据
-	for key, r := range fromData {
+	for key, r := range formData {
 		var fw io.Writer
 		fw, err := w.CreateFormField(key)
 		checkErr(err)
@@ -100,7 +100,7 @@ func structureMultiform(fromData map[string]io.Reader, file *os.File) (bytes.Buf
 		checkErr(err)
 	}
 
-	fw, err := w.CreateFormFile("image", file.Name())
+	fw, err := w.CreateFormFile("image", fileName)
 	_, err = io.Copy(fw, file)
 	checkErr(err)
 	contentType := w.FormDataContentType()
