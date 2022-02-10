@@ -1,6 +1,7 @@
 package main
 
 import (
+	"PicTool/ReadImage"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -22,6 +22,7 @@ type RecvData struct {
 
 func main() {
 	url := "https://blog.dongliu.site/img/upload"
+	//url = "http://localhost:8000/img/upload"
 	var CSRFToken string
 	// 构造Session保证Cookie连续
 	jar, _ := cookiejar.New(nil)
@@ -46,15 +47,22 @@ func main() {
 
 	imageAlbum := "1"
 	for _, p := range os.Args[1:] {
-		imageName := filepath.Base(p)
-		imageDir := filepath.Dir(p)
-		imagePath := filepath.Join(imageDir, imageName)
-		postData := map[string]io.Reader{
+		// 获取文件名称
+		imageName := ReadImage.GetImageName(p)
+		// 构建数据
+		formData := map[string]io.Reader{
 			"name":                strings.NewReader(imageName),
 			"album":               strings.NewReader(imageAlbum),
 			"csrfmiddlewaretoken": strings.NewReader(CSRFToken),
 		}
-		b, contentType := structureMultiform(postData, imagePath)
+		// 读取数据
+		image, err := ReadImage.OpenImage(p)
+		if err != nil {
+			panic(err)
+		}
+		b, contentType := structureMultiform(formData, image)
+		// 关闭文件
+		_ = image.Close()
 
 		// 发送数据
 		req, _ = http.NewRequest("POST", url, &b)
@@ -62,12 +70,10 @@ func main() {
 		res, err := client.Do(req)
 		checkErr(err)
 
-		defer func(Body io.ReadCloser) {
-			err := Body.Close()
-			checkErr(err)
-		}(res.Body)
 		// 对接收到的JSON数据进行处理
 		body, _ := ioutil.ReadAll(res.Body)
+		// 关闭数据连接
+		_ = res.Body.Close()
 		var recvData RecvData
 		err = json.Unmarshal(body, &recvData)
 		checkErr(err)
@@ -81,23 +87,21 @@ func main() {
 }
 
 // 构造多表单
-func structureMultiform(data map[string]io.Reader, imagePath string) (bytes.Buffer, string) {
+func structureMultiform(fromData map[string]io.Reader, file *os.File) (bytes.Buffer, string) {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 
 	// 写入表单数据
-	for key, r := range data {
+	for key, r := range fromData {
 		var fw io.Writer
 		fw, err := w.CreateFormField(key)
 		checkErr(err)
 		_, err = io.Copy(fw, r)
 		checkErr(err)
 	}
-	// 写入图片
-	img, err := os.Open(imagePath)
-	checkErr(err)
-	fw, err := w.CreateFormFile("image", img.Name())
-	_, err = io.Copy(fw, img)
+
+	fw, err := w.CreateFormFile("image", file.Name())
+	_, err = io.Copy(fw, file)
 	checkErr(err)
 	contentType := w.FormDataContentType()
 
