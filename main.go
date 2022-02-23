@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -31,7 +32,8 @@ type Config struct {
 func main() {
 	// 读取配置文件
 	var config Config
-	tem, err := ioutil.ReadFile("./config.json")
+	configurePath := filepath.Join(filepath.Dir(os.Args[0]), "config.json")
+	tem, err := ioutil.ReadFile(configurePath)
 	checkErr(err)
 	err = json.Unmarshal(tem, &config)
 	checkErr(err)
