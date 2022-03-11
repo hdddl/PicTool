@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,10 +31,20 @@ type Config struct {
 	Password string `json:"password"`
 }
 
+type Cookie struct {
+	Csrftoken string `json:"csrftoken"`
+	Sessionid string `json:"sessionid"`
+}
+
+var (
+	currentPath   = filepath.Dir(os.Args[0])                  // 程序目录路径
+	configurePath = filepath.Join(currentPath, "config.json") // 配置文件路径
+	cookiePath    = filepath.Join(currentPath, "cookie.json") // cookie 路径
+)
+
 func main() {
 	// 读取配置文件
 	var config Config
-	configurePath := filepath.Join(filepath.Dir(os.Args[0]), "config.json")
 	tem, err := ioutil.ReadFile(configurePath)
 	checkErr(err)
 	err = json.Unmarshal(tem, &config)
@@ -44,9 +56,12 @@ func main() {
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Jar: jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}, // 拒绝重定向
 	}
-	// 模拟登入
-	_ = config.login(loginURL, client)
+
+	config.LoadCookie(client, loginURL) // 加载cookie
 
 	err, CSRFToken := getCSRFToken(uploadURL, client)
 	checkErr(err)
@@ -84,8 +99,8 @@ func main() {
 		var recvData RecvData
 		err = json.Unmarshal(body, &recvData)
 		checkErr(err)
-		if recvData.Status {
-			resURL := "https://blog.dongliu.site/media" + recvData.Path
+		if recvData.Status { // 打印出返回的URL
+			resURL := config.Host + "/media" + recvData.Path
 			fmt.Println(resURL)
 		} else {
 			fmt.Println(recvData.Msg)
@@ -93,8 +108,9 @@ func main() {
 	}
 }
 
-func (c Config) login(url string, client *http.Client) bool {
-	err, CSRFToken := getCSRFToken(url, client)
+// 登入获取cookie
+func (c Config) login(loginURL string, client *http.Client) bool {
+	err, CSRFToken := getCSRFToken(loginURL, client)
 	checkErr(err)
 	loginData := map[string]io.Reader{
 		"username":            strings.NewReader(c.Username),
@@ -103,18 +119,78 @@ func (c Config) login(url string, client *http.Client) bool {
 	}
 	b, contentType := structureMultiform(loginData, nil)
 	// 发送数据
-	req, _ := http.NewRequest("POST", url, &b)
+	req, _ := http.NewRequest("POST", loginURL, &b)
 	req.Header.Set("Content-Type", contentType)
 	res, err := client.Do(req)
 	checkErr(err)
-	return res.StatusCode != http.StatusOK
+	return res.StatusCode != http.StatusOK // 返回true则表示密码正确反之则是密码错误
+}
+
+// RefreshCookie 刷新cookie存储
+func (c Config) RefreshCookie(client *http.Client, loginURL string) {
+	if !c.login(loginURL, client) {
+		log.Fatalln("wrong password")
+	}
+	u, _ := url.Parse(c.Host)
+	cookies := client.Jar.Cookies(u)
+	var cookie Cookie
+	file, err := os.OpenFile(cookiePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	checkErr(err)
+	for _, item := range cookies {
+		if item.Name == "csrftoken" {
+			cookie.Csrftoken = item.Value
+		} else {
+			cookie.Sessionid = item.Value
+		}
+	}
+	b, err := json.Marshal(cookie)
+	checkErr(err)
+	_, _ = file.Write(b)
+	_ = file.Close()
+}
+
+// LoadCookie 读取已经存储的cookie并验证是否可用
+func (c Config) LoadCookie(client *http.Client, loginURL string) {
+	_, err := os.Stat(cookiePath)
+	if err != nil {
+		if os.IsNotExist(err) { // 如果cookie不存在则刷新cookie
+			c.RefreshCookie(client, loginURL)
+		} else {
+			log.Fatalln(err)
+		}
+	}
+	// 从文件中读取cookie
+	var cookie Cookie
+	bCookie, _ := ioutil.ReadFile(cookiePath)
+	_ = json.Unmarshal(bCookie, &cookie)
+	u, _ := url.Parse(c.Host)
+
+	csrftoken := http.Cookie{
+		Name:  "csrftoken",
+		Value: cookie.Csrftoken,
+	}
+	sessionid := http.Cookie{
+		Name:  "sessionid",
+		Value: cookie.Sessionid,
+	}
+
+	client.Jar.SetCookies(u, []*http.Cookie{
+		&csrftoken,
+		&sessionid,
+	})
+	// 开始验证cookie是否可用
+	testURL := "https://blog.dongliu.site/admin/"
+	res, _ := client.Get(testURL)
+	if res.StatusCode != http.StatusOK { // 如果响应值不为200则说明cookie过期了
+		c.RefreshCookie(client, loginURL)
+	}
 }
 
 // 获取CSRFToken
-func getCSRFToken(url string, client *http.Client) (error, string) {
+func getCSRFToken(Url string, client *http.Client) (error, string) {
 	CSRFToken := ""
 	// 开始发送GET请求获取CSRT token
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequest("GET", Url, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err, CSRFToken
@@ -163,6 +239,6 @@ func structureMultiform(formData map[string]io.Reader, formFile map[string]ReadI
 // 错误检查
 func checkErr(err error) {
 	if err != nil {
-		panic(err)
+		log.Fatalln(err)
 	}
 }
