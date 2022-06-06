@@ -61,7 +61,7 @@ func main() {
 		}, // 拒绝重定向
 	}
 
-	config.LoadCookie(client, loginURL) // 加载cookie
+	config.loadCookie(client, loginURL) // 加载cookie
 
 	err, CSRFToken := getCSRFToken(uploadURL, client)
 	checkErr(err)
@@ -89,6 +89,7 @@ func main() {
 		// 发送数据
 		req, _ := http.NewRequest("POST", uploadURL, &b)
 		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("direct", "true") // 要求返回直链
 		res, err := client.Do(req)
 		checkErr(err)
 
@@ -150,7 +151,7 @@ func (c Config) RefreshCookie(client *http.Client, loginURL string) {
 }
 
 // LoadCookie 读取已经存储的cookie并验证是否可用
-func (c Config) LoadCookie(client *http.Client, loginURL string) {
+func (c Config) loadCookie(client *http.Client, loginURL string) {
 	_, err := os.Stat(cookiePath)
 	if err != nil {
 		if os.IsNotExist(err) { // 如果cookie不存在则刷新cookie
@@ -179,7 +180,7 @@ func (c Config) LoadCookie(client *http.Client, loginURL string) {
 		&sessionid,
 	})
 	// 开始验证cookie是否可用
-	testURL := "https://blog.dongliu.site/admin/"
+	testURL := c.Host + "/admin/"
 	res, _ := client.Get(testURL)
 	if res.StatusCode != http.StatusOK { // 如果响应值不为200则说明cookie过期了
 		c.RefreshCookie(client, loginURL)
